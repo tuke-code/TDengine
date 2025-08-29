@@ -1930,7 +1930,8 @@ int32_t stTriggerTaskProcessRsp(SStreamTask *pStreamTask, SRpcMsg *pRsp, int64_t
     switch (pRsp->code) {
       case TSDB_CODE_SUCCESS:
       case TSDB_CODE_TDB_INVALID_TABLE_SCHEMA_VER:
-      case TSDB_CODE_STREAM_INSERT_TBINFO_NOT_FOUND: {
+      case TSDB_CODE_STREAM_INSERT_TBINFO_NOT_FOUND:
+      case TSDB_CODE_STREAM_VTABLE_NEED_REDEPLOY: {
         // todo(kjq): retry calc request when trigger could clear data cache manually
         if (pRsp->code != TSDB_CODE_SUCCESS && (pTask->placeHolderBitmap & PLACE_HOLDER_PARTITION_ROWS)) {
           *pErrTaskId = pReq->runnerTaskId;
@@ -2700,6 +2701,16 @@ static int32_t stRealtimeContextCheck(SSTriggerRealtimeContext *pContext) {
       SListNode            *pNode = TD_DLIST_HEAD(&pContext->retryPullReqs);
       SSTriggerPullRequest *pReq = *(SSTriggerPullRequest **)pNode->data;
       code = stRealtimeContextRetryPullRequest(pContext, pNode, pReq);
+      QUERY_CHECK_CODE(code, lino, _end);
+    }
+    goto _end;
+  }
+
+  if (listNEles(&pContext->retryCalcReqs) > 0) {
+    while (listNEles(&pContext->retryCalcReqs) > 0) {
+      SListNode           *pNode = TD_DLIST_HEAD(&pContext->retryCalcReqs);
+      SSTriggerCalcRequest *pReq = *(SSTriggerCalcRequest **)pNode->data;
+      code = stRealtimeContextRetryCalcRequest(pContext, pNode, pReq);
       QUERY_CHECK_CODE(code, lino, _end);
     }
     goto _end;
@@ -3791,7 +3802,7 @@ static int32_t stRealtimeContextProcCalcRsp(SSTriggerRealtimeContext *pContext, 
       code = stRealtimeContextCheck(pContext);
       QUERY_CHECK_CODE(code, lino, _end);
     }
-  } else {
+  } else if (pRsp->code != TSDB_CODE_STREAM_VTABLE_NEED_REDEPLOY) {
     code = tdListAppend(&pContext->retryCalcReqs, &pReq);
     QUERY_CHECK_CODE(code, lino, _end);
     SListNode *pNode = TD_DLIST_TAIL(&pContext->retryCalcReqs);
